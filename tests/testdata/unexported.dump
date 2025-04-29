@@ -1,0 +1,5 @@
+tests_test.StructWithUnexportedType{
+  unexported: tests_test.unexportedStruct{
+    x: 0,
+  },
+}

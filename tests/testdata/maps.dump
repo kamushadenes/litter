@@ -9,7 +9,7 @@
     2: "two",
     3: "three",
   },
-  map[int]*litter_test.BlankStruct{
-    2: &litter_test.BlankStruct{},
+  map[int]*tests_test.BlankStruct{
+    2: &tests_test.BlankStruct{},
   },
 }

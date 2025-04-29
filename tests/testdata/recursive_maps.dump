@@ -1,0 +1,12 @@
+map[*tests_test.RecursiveStruct]*tests_test.RecursiveStruct{
+  &tests_test.RecursiveStruct{ // p0
+    Ptr: p0,
+  }: &tests_test.RecursiveStruct{ // p1
+    Ptr: p1,
+  },
+  &tests_test.RecursiveStruct{ // p2
+    Ptr: p2,
+  }: &tests_test.RecursiveStruct{ // p3
+    Ptr: p3,
+  },
+}

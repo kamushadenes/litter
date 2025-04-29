@@ -1,5 +1,5 @@
 []interface {}{
-  litter_test.options{
+  tests_test.options{
     Compact: false,
     StripPackageNames: false,
     HidePrivateFields: true,
@@ -7,10 +7,10 @@
     Separator: " ",
     StrictGo: false,
   },
-  &litter_test.BasicStruct{
+  &tests_test.BasicStruct{
     Public: 1,
   },
-  litter_test.Function,
+  tests_test.Function,
   &20,
   &20,
   litter.Dump,

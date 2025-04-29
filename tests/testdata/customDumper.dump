@@ -1,0 +1,15 @@
+map[string]interface {}{
+  "v1": *tests_test.CustomMultiLineDumper{ // p0
+    multi
+    line
+  },
+  "v2": p0,
+  "v2x": *tests_test.CustomMultiLineDumper{
+    multi
+    line
+  },
+  "v3": tests_test.CustomSingleLineDumper<custom>,
+  "v4": *tests_test.CustomSingleLineDumper<custom>, // p1
+  "v5": p1,
+  "v6": *tests_test.CustomSingleLineDumper<custom>,
+}

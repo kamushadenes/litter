@@ -1,17 +1,14 @@
-package litter_test
+package tests_test
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"reflect"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"github.com/sanity-io/litter"
 )
@@ -156,7 +153,7 @@ func TestSdump_config(t *testing.T) {
 		Separator:         " ",
 	}
 
-	data := []interface{}{
+	data := []any{
 		opts,
 		&BasicStruct{1, 2},
 		Function,
@@ -180,7 +177,7 @@ func TestSdump_config(t *testing.T) {
 		StripPackageNames: true,
 	}, data)
 	runTestWithCfg(t, "config_HomePackage", &litter.Options{
-		HomePackage: "litter_test",
+		HomePackage: "tests_test",
 	}, data)
 	runTestWithCfg(t, "config_FieldFilter", &litter.Options{
 		FieldFilter: func(f reflect.StructField, v reflect.Value) bool {
@@ -213,7 +210,7 @@ func TestSdump_config(t *testing.T) {
 	basic := &BasicStruct{1, 2}
 	runTestWithCfg(t, "config_DisablePointerReplacement_simpleReusedStruct", &litter.Options{
 		DisablePointerReplacement: true,
-	}, []interface{}{basic, basic})
+	}, []any{basic, basic})
 	circular := &RecursiveStruct{}
 	circular.Ptr = circular
 	runTestWithCfg(t, "config_DisablePointerReplacement_circular", &litter.Options{
@@ -231,7 +228,7 @@ func TestSdump_multipleArgs(t *testing.T) {
 }
 
 func TestSdump_maps(t *testing.T) {
-	runTests(t, "maps", []interface{}{
+	runTests(t, "maps", []any{
 		map[string]string{
 			"hello":          "there",
 			"something":      "something something",
@@ -278,7 +275,7 @@ func TestSdump_unexported(t *testing.T) {
 
 var standardCfg = litter.Options{}
 
-func runTestWithCfg(t *testing.T, name string, cfg *litter.Options, cases ...interface{}) {
+func runTestWithCfg(t *testing.T, name string, cfg *litter.Options, cases ...any) {
 	t.Run(name, func(t *testing.T) {
 		fileName := fmt.Sprintf("testdata/%s.dump", name)
 
@@ -294,63 +291,10 @@ func runTestWithCfg(t *testing.T, name string, cfg *litter.Options, cases ...int
 			return
 		}
 
-		assertEqualStringsWithDiff(t, string(reference), dump)
+		assert.Equal(t, string(reference), dump)
 	})
 }
 
-func runTests(t *testing.T, name string, cases ...interface{}) {
+func runTests(t *testing.T, name string, cases ...any) {
 	runTestWithCfg(t, name, &standardCfg, cases...)
-}
-
-func diffStrings(t *testing.T, expected, actual string) (*string, bool) {
-	if actual == expected {
-		return nil, true
-	}
-
-	dir, err := os.MkdirTemp("", "test")
-	require.NoError(t, err)
-	defer os.RemoveAll(dir)
-
-	require.NoError(t, os.WriteFile(fmt.Sprintf("%s/expected", dir), []byte(expected), 0644))
-	require.NoError(t, os.WriteFile(fmt.Sprintf("%s/actual", dir), []byte(actual), 0644))
-
-	out, err := exec.Command("diff", "--side-by-side",
-		fmt.Sprintf("%s/expected", dir),
-		fmt.Sprintf("%s/actual", dir)).Output()
-
-	var exitErr *exec.ExitError
-	if !errors.As(err, &exitErr) {
-		require.NoError(t, err)
-	}
-
-	diff := string(out)
-	return &diff, false
-}
-
-func assertEqualStringsWithDiff(t *testing.T, expected, actual string,
-	msgAndArgs ...interface{}) bool {
-	diff, ok := diffStrings(t, expected, actual)
-	if ok {
-		return true
-	}
-
-	message := messageFromMsgAndArgs(msgAndArgs...)
-	if message == "" {
-		message = "Strings are different"
-	}
-	assert.Fail(t, fmt.Sprintf("%s (left is expected, right is actual):\n%s", message, *diff))
-	return false
-}
-
-func messageFromMsgAndArgs(msgAndArgs ...interface{}) string {
-	if len(msgAndArgs) == 0 || msgAndArgs == nil {
-		return ""
-	}
-	if len(msgAndArgs) == 1 {
-		return msgAndArgs[0].(string)
-	}
-	if len(msgAndArgs) > 1 {
-		return fmt.Sprintf(msgAndArgs[0].(string), msgAndArgs[1:]...)
-	}
-	return ""
 }
