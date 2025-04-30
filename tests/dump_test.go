@@ -1,14 +1,17 @@
 package tests_test
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"reflect"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/sanity-io/litter"
 )
@@ -291,8 +294,61 @@ func runTestWithCfg(t *testing.T, name string, cfg *litter.Options, cases ...any
 			return
 		}
 
-		assert.Equal(t, string(reference), dump)
+		assertEqualStringsWithDiff(t, string(reference), dump)
 	})
+}
+
+func diffStrings(t *testing.T, expected, actual string) (*string, bool) {
+	if actual == expected {
+		return nil, true
+	}
+
+	dir, err := os.MkdirTemp("", "test")
+	require.NoError(t, err)
+	defer os.RemoveAll(dir)
+
+	require.NoError(t, os.WriteFile(fmt.Sprintf("%s/expected", dir), []byte(expected), 0644))
+	require.NoError(t, os.WriteFile(fmt.Sprintf("%s/actual", dir), []byte(actual), 0644))
+
+	out, err := exec.Command("diff", "--side-by-side",
+		fmt.Sprintf("%s/expected", dir),
+		fmt.Sprintf("%s/actual", dir)).Output()
+
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		require.NoError(t, err)
+	}
+
+	diff := string(out)
+	return &diff, false
+}
+
+func assertEqualStringsWithDiff(t *testing.T, expected, actual string,
+	msgAndArgs ...interface{}) bool {
+	diff, ok := diffStrings(t, expected, actual)
+	if ok {
+		return true
+	}
+
+	message := messageFromMsgAndArgs(msgAndArgs...)
+	if message == "" {
+		message = "Strings are different"
+	}
+	assert.Fail(t, fmt.Sprintf("%s (left is expected, right is actual):\n%s", message, *diff))
+	return false
+}
+
+func messageFromMsgAndArgs(msgAndArgs ...interface{}) string {
+	if len(msgAndArgs) == 0 || msgAndArgs == nil {
+		return ""
+	}
+	if len(msgAndArgs) == 1 {
+		return msgAndArgs[0].(string)
+	}
+	if len(msgAndArgs) > 1 {
+		return fmt.Sprintf(msgAndArgs[0].(string), msgAndArgs[1:]...)
+	}
+	return ""
 }
 
 func runTests(t *testing.T, name string, cases ...any) {
