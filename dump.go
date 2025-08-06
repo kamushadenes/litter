@@ -2,6 +2,7 @@ package litter
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 var (
@@ -24,18 +26,50 @@ type Dumper interface {
 	LitterDump(w io.Writer)
 }
 
+type Format string
+
+const (
+	// FormatLitter is the default output format.
+	FormatLitter Format = "litter"
+
+	// FormatJSON outputs in JSON format.
+	FormatJSON Format = "json"
+)
+
 // Options represents configuration options for litter
 type Options struct {
-	Compact           bool
+	// Use compact output: strip newlines and other unnecessary whitespace
+	Compact bool
+
+	// Use compact output: strip newlines and other unnecessary whitespace
 	StripPackageNames bool
+
+	// Hide private struct fields from dumped structs
 	HidePrivateFields bool
-	HideZeroValues    bool
-	FieldExclusions   *regexp.Regexp
-	FieldFilter       func(reflect.StructField, reflect.Value) bool
-	HomePackage       string
-	Separator         string
-	StrictGo          bool
-	DumpFunc          func(reflect.Value, io.Writer) bool
+
+	// Hide zero values from dumped structs and maps.
+	HideZeroValues bool
+
+	// Hide pointer indicators (&) in the output. Only applies to FormatLitter.
+	HidePointerIndicators bool
+
+	// Hide fields matched with given regexp if it is not nil. It is set up to hide fields generated with protoc-gen-go.
+	FieldExclusions *regexp.Regexp
+
+	// FieldFilter is a function that can be used to filter fields based on their name and value.
+	FieldFilter func(reflect.StructField, reflect.Value) bool
+
+	// Sets a "home" package. The package name will be stripped from all its types
+	HomePackage string
+
+	// Sets separator used when multiple arguments are passed to Dump() or Sdump().
+	Separator string
+
+	// Outputs valid Go code that can be used to recreate the value. Only applies to FormatLitter.
+	StrictGo bool
+
+	// DumpFunc is a function that can be used to dump custom types. If it returns true, the value is considered dumped.
+	DumpFunc func(reflect.Value, io.Writer) bool
 
 	// DisablePointerReplacement, if true, disables the replacing of pointer data with variable names
 	// when it's safe. This is useful for diffing two structures, where pointer variables would cause
@@ -44,6 +78,9 @@ type Options struct {
 
 	// FormatTime, if true, will format [time.Time] values.
 	FormatTime bool
+
+	// Format specifies the output format. Supported formats are FormatLitter (default) and FormatJSON.
+	Format Format
 }
 
 // Config is the default config used when calling Dump
@@ -134,6 +171,12 @@ func (s *dumpState) dumpSlice(v reflect.Value) {
 }
 
 func (s *dumpState) dumpStruct(v reflect.Value) {
+	if s.config.Format == FormatJSON {
+		// Delegate to the correct JSON-specific function
+		s.dumpStructJSON(v)
+		return
+	}
+
 	if v.CanInterface() {
 		val := v.Interface()
 		if t, ok := val.(time.Time); ok && s.timeFormatter != nil {
@@ -191,6 +234,12 @@ func (s *dumpState) dumpStruct(v reflect.Value) {
 }
 
 func (s *dumpState) dumpMap(v reflect.Value) {
+	if s.config.Format == FormatJSON {
+		// Delegate to the correct JSON-specific function
+		s.dumpMapJSON(v)
+		return
+	}
+
 	if v.IsNil() {
 		s.dumpType(v)
 		s.writeString("(nil)")
@@ -238,16 +287,28 @@ func (s *dumpState) dumpFunc(v reflect.Value) {
 
 	// Anonymous function
 	if strings.Count(name, ".") > 1 {
-		s.dumpType(v)
-	} else {
-		if s.config.StripPackageNames {
-			name = packageNameStripperRegexp.ReplaceAllLiteralString(name, "")
-		} else if s.homePackageRegexp != nil {
-			name = s.homePackageRegexp.ReplaceAllLiteralString(name, "")
+		switch s.config.Format {
+		case FormatJSON:
+			s.writeString(strconv.Quote(name))
+		case FormatLitter:
+			s.dumpType(v)
 		}
-		if s.config.Compact {
-			name = compactTypeRegexp.ReplaceAllString(name, "$1")
-		}
+
+		return
+	}
+
+	if s.config.StripPackageNames {
+		name = packageNameStripperRegexp.ReplaceAllLiteralString(name, "")
+	} else if s.homePackageRegexp != nil {
+		name = s.homePackageRegexp.ReplaceAllLiteralString(name, "")
+	}
+	if s.config.Compact {
+		name = compactTypeRegexp.ReplaceAllString(name, "$1")
+	}
+	switch s.config.Format {
+	case FormatJSON:
+		s.writeString(strconv.Quote(name))
+	case FormatLitter:
 		s.write([]byte(name))
 	}
 }
@@ -341,6 +402,11 @@ func (s *dumpState) descendIntoPossiblePointer(value reflect.Value, f func()) {
 }
 
 func (s *dumpState) dumpVal(value reflect.Value) {
+	if s.config.Format == FormatJSON {
+		s.dumpValJSON(value)
+		return
+	}
+
 	if value.Kind() == reflect.Ptr && value.IsNil() {
 		s.write([]byte("nil"))
 		return
@@ -426,7 +492,9 @@ func (s *dumpState) dumpVal(value reflect.Value) {
 				s.dumpVal(v.Elem())
 				s.writeString(")")
 			} else {
-				s.writeString("&")
+				if !s.config.HidePointerIndicators {
+					s.writeString("&")
+				}
 				s.dumpVal(v.Elem())
 			}
 		})
@@ -494,6 +562,152 @@ func newDumpState(value reflect.Value, options *Options, writer io.Writer) *dump
 	return result
 }
 
+func (s *dumpState) dumpValJSON(value reflect.Value) {
+	if !value.IsValid() || (isPointerValue(value) && value.IsNil()) {
+		s.writeString("null")
+		return
+	}
+
+	// Handle circular references
+	if isPointerValue(value) {
+		if s.visitedPointers.contains(value) {
+			s.writeString("null")
+			return
+		}
+		s.visitedPointers.add(value)
+		defer s.visitedPointers.remove(value)
+	}
+
+	v := deInterface(value)
+	for v.Kind() == reflect.Ptr {
+		v = v.Elem()
+	}
+
+	switch v.Kind() {
+	case reflect.Invalid:
+		s.writeString("null")
+	case reflect.Bool:
+		printBool(s.w, v.Bool())
+	case reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Int:
+		printInt(s.w, v.Int(), 10)
+	case reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uint:
+		printUint(s.w, v.Uint(), 10)
+	case reflect.Float32, reflect.Float64:
+		printFloat(s.w, v.Float(), 64)
+	case reflect.String:
+		s.writeString(strconv.Quote(v.String()))
+	case reflect.Slice, reflect.Array:
+		s.dumpSliceJSON(v)
+	case reflect.Map:
+		s.dumpMapJSON(v)
+	case reflect.Struct:
+		s.dumpStructJSON(v)
+	case reflect.Func:
+		s.dumpFunc(v)
+	default:
+		// For unsupported types, print as an escaped JSON string.
+		s.writeString(strconv.Quote(fmt.Sprintf("%v", v.Interface())))
+	}
+}
+
+func (s *dumpState) dumpSliceJSON(v reflect.Value) {
+	s.writeString("[")
+	numEntries := v.Len()
+	for i := 0; i < numEntries; i++ {
+		s.dumpValJSON(v.Index(i))
+		if i < numEntries-1 {
+			s.writeString(",")
+		}
+	}
+	s.writeString("]")
+}
+
+func (s *dumpState) dumpMapJSON(v reflect.Value) {
+	s.writeString("{")
+	keys := v.MapKeys()
+	// Note: JSON object keys are not required to be sorted, but we do it for deterministic output.
+	sort.Sort(mapKeySorter{
+		keys:    keys,
+		options: s.config,
+	})
+	numKeys := len(keys)
+	for i, key := range keys {
+		// JSON keys must be strings.
+		s.writeString(strconv.Quote(fmt.Sprintf("%v", key.Interface())))
+		s.writeString(":")
+		s.dumpValJSON(v.MapIndex(key))
+		if i < numKeys-1 {
+			s.writeString(",")
+		}
+	}
+	s.writeString("}")
+}
+
+// toLowerCamelCase converts a field name to lower-camel-case following Go's encoding/json conventions.
+// For example: "FieldName" becomes "fieldName", "MyField" becomes "myField"
+func toLowerCamelCase(fieldName string) string {
+	if fieldName == "" {
+		return fieldName
+	}
+
+	// Convert first character to lowercase
+	runes := []rune(fieldName)
+	runes[0] = unicode.ToLower(runes[0])
+	return string(runes)
+}
+
+func (s *dumpState) dumpStructJSON(v reflect.Value) {
+	s.writeString("{")
+	vt := v.Type()
+	numFields := v.NumField()
+	firstField := true
+	for i := 0; i < numFields; i++ {
+		vtf := vt.Field(i)
+		// Skip unexported fields
+		if vtf.PkgPath != "" {
+			continue
+		}
+
+		// Apply the same field filtering logic as the regular dumper
+		if s.config.HidePrivateFields && vtf.PkgPath != "" || s.config.FieldExclusions != nil && s.config.FieldExclusions.MatchString(vtf.Name) {
+			continue
+		}
+		if s.config.FieldFilter != nil && !s.config.FieldFilter(vtf, v.Field(i)) {
+			continue
+		}
+		if s.config.HideZeroValues && isZeroValue(v.Field(i)) {
+			continue
+		}
+
+		// Get field name from json tag, otherwise use lower-camel-case field name like encoding/json does
+		fieldName := vtf.Name
+		jsonTag := vtf.Tag.Get("json")
+		if jsonTag != "" {
+			// Handle tags like `json:"fieldName,omitempty"`
+			parts := strings.Split(jsonTag, ",")
+			if parts[0] == "-" {
+				continue // Skip field
+			}
+			if parts[0] != "" {
+				fieldName = parts[0]
+			}
+		} else {
+			// No json tag specified, convert to lower-camel-case following Go's encoding/json conventions
+			fieldName = toLowerCamelCase(vtf.Name)
+		}
+
+		if !firstField {
+			s.writeString(",")
+		}
+		firstField = false
+
+		s.writeString(strconv.Quote(fieldName))
+		s.writeString(":")
+		s.dumpValJSON(v.Field(i))
+	}
+	s.writeString("}")
+}
+
 // Dump a value to stdout.
 func Dump(value ...interface{}) {
 	(&Config).Dump(value...)
@@ -531,6 +745,19 @@ func (o Options) Sdump(values ...interface{}) string {
 		state := newDumpState(reflect.ValueOf(value), &o, buf)
 		state.dump(value)
 	}
+
+	if o.Format == FormatJSON && !o.Compact {
+		var m interface{}
+		if err := json.Unmarshal(buf.Bytes(), &m); err != nil {
+			panic(fmt.Sprintf("Failed to unmarshal JSON: %v", err))
+		}
+		b, err := json.MarshalIndent(m, "", "  ")
+		if err != nil {
+			panic(fmt.Sprintf("Failed to marshal JSON: %v", err))
+		}
+		return string(b)
+	}
+
 	return buf.String()
 }
 
