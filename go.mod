@@ -1,3 +1,3 @@
 module github.com/kamushadenes/litter
 
-go 1.24
+go 1.23
