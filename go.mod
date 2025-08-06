@@ -1,3 +1,3 @@
-module github.com/sanity-io/litter
+module github.com/kamushadenes/litter
 
-go 1.16
+go 1.24
